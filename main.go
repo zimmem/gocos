@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"gocos/cosclient"
 	"io/ioutil"
-	"log"
 	"os"
 	"os/user"
+	"path/filepath"
 
 	"gopkg.in/alecthomas/kingpin.v2"
 )
@@ -20,17 +22,27 @@ var (
 
 	push       = app.Command("push", "push from local to cos")
 	pushLocal  = push.Arg("local", "local path").Required().String()
-	pushRemote = push.Arg("remote", "cos path").Required().Strings()
+	pushRemote = push.Arg("remote", "cos path").Required().String()
 
 	rm          = app.Command("rm", "rm files or directories from cos")
 	rmPath      = rm.Arg("remote", "remote cos path").Required().String()
 	rmRecursive = rm.Flag("recursive", "remove directories and their contents recursively").Short('r').Bool()
+	rmForce     = rm.Flag("force", "force rm even has children").Short('f').Bool()
 
-	retry       = app.Command("retry", "run retry script")
-	retryScript = retry.Arg("script", "retry script path").ExistingFile()
+	ls     = app.Command("ls", "list file at directories")
+	lsPath = ls.Arg("path", "path on cos").Required().String()
+
+	stat     = app.Command("stat", "statFile")
+	statPath = stat.Arg("path", "path on cos").Required().String()
+
+	// retry       = app.Command("retry", "run retry script")
+	// retryScript = retry.Arg("script", "retry script path").ExistingFile()
+
+	env    = app.Command("env", "show current config")
+	config = ""
 )
 
-func loadConfig(configFile *string) {
+func loadConfig(configFile *string) []byte {
 
 	var file *os.File
 	var err error
@@ -41,41 +53,70 @@ func loadConfig(configFile *string) {
 		*configFile = "cos.config.json"
 		_, err = os.Stat(*configFile)
 		if err != nil && os.IsNotExist(err) {
-			var usr, _ = user.Current()
-			*configFile = usr.HomeDir + string(os.PathSeparator) + "cos.config.json"
-			_, err = os.Stat(*configFile)
-			if err != nil && os.IsNotExist(err) {
-				fmt.Printf("config not exist")
-				os.Exit(1)
-			}
+			*configFile = getUserHOme() + string(os.PathSeparator) + "cos.config.json"
 		}
 	}
-	fmt.Printf("load config from  : %s\n", *configFile)
+	//fmt.Printf("load config from  : %s\n", *configFile)
 	file, _ = os.Open(*configFile)
 	text, e := ioutil.ReadAll(file)
 	exitIfErr(e)
-	println(text)
+	config, _ = filepath.Abs(*configFile)
+	return text
 }
 
 func exitIfErr(e error) {
 	if e != nil {
-		log.Fatal(e)
+		fmt.Fprintf(os.Stderr, "%s\n", e)
 		os.Exit(1)
 	}
 }
 
+func getUserHOme() string {
+	h := os.Getenv("HOME")
+	if len(h) == 0 {
+		var usr, _ = user.Current()
+		h = usr.HomeDir
+	}
+	return h
+}
+
 func main() {
+	os.Setenv("HTTP_PROXY", "http://127.0.0.1:8888")
+
+	defer func() {
+		e := recover()
+		if e != nil {
+			fmt.Fprintf(os.Stderr, "%+v", e)
+		}
+	}()
 
 	var command = kingpin.MustParse(app.Parse(os.Args[1:]))
-	loadConfig(configFile)
+
+	client := &cosclient.CosClient{}
+	json.Unmarshal(loadConfig(configFile), client)
+
 	switch command {
 
 	case pull.FullCommand():
-		loadConfig(configFile)
-		println(*pullRemote)
+		client.Download(*pullRemote, *pullLoacl)
 
 	case push.FullCommand():
-		println(*pushLocal)
+		client.Upload(*pushLocal, *pushRemote, false)
+
+	case rm.FullCommand():
+		client.DeleteResource(*rmPath, *rmRecursive, *rmForce)
+
+	case ls.FullCommand():
+		client.List(*lsPath, "")
+	case stat.FullCommand():
+		client.StatFile(*statPath)
+
+	case env.FullCommand():
+		fmt.Println("config: " + config)
+
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		encoder.Encode(client)
 	}
 
 }
