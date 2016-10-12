@@ -10,35 +10,14 @@ import (
 	"path/filepath"
 
 	"gopkg.in/alecthomas/kingpin.v2"
+	"gocos/cmd"
 )
 
 var (
-	app        = kingpin.New("gocos", "A command-line toll for qcloud cos.")
+	app = kingpin.New("gocos", "A command-line toll for qcloud cos.")
 	configFile = app.Flag("config", "config file path").String()
 
-	pull       = app.Command("pull", "pull from cos to local")
-	pullRemote = pull.Arg("remote", "remote path").Required().String()
-	pullLoacl  = pull.Arg("local", "local path").Required().String()
-
-	push       = app.Command("push", "push from local to cos")
-	pushLocal  = push.Arg("local", "local path").Required().String()
-	pushRemote = push.Arg("remote", "cos path").Required().String()
-
-	rm          = app.Command("rm", "rm files or directories from cos")
-	rmPath      = rm.Arg("remote", "remote cos path").Required().String()
-	rmRecursive = rm.Flag("recursive", "remove directories and their contents recursively").Short('r').Bool()
-	rmForce     = rm.Flag("force", "force rm even has children").Short('f').Bool()
-
-	ls     = app.Command("ls", "list file at directories")
-	lsPath = ls.Arg("path", "path on cos").Required().String()
-
-	stat     = app.Command("stat", "statFile")
-	statPath = stat.Arg("path", "path on cos").Required().String()
-
-	// retry       = app.Command("retry", "run retry script")
-	// retryScript = retry.Arg("script", "retry script path").ExistingFile()
-
-	env    = app.Command("env", "show current config")
+	env = app.Command("env", "show current config")
 	config = ""
 )
 
@@ -53,11 +32,12 @@ func loadConfig(configFile *string) []byte {
 		*configFile = "cos.config.json"
 		_, err = os.Stat(*configFile)
 		if err != nil && os.IsNotExist(err) {
-			*configFile = getUserHOme() + string(os.PathSeparator) + "cos.config.json"
+			*configFile = getUserHome() + string(os.PathSeparator) + ".cos.config.json"
 		}
 	}
 	//fmt.Printf("load config from  : %s\n", *configFile)
 	file, _ = os.Open(*configFile)
+	defer file.Close()
 	text, e := ioutil.ReadAll(file)
 	exitIfErr(e)
 	config, _ = filepath.Abs(*configFile)
@@ -71,7 +51,7 @@ func exitIfErr(e error) {
 	}
 }
 
-func getUserHOme() string {
+func getUserHome() string {
 	h := os.Getenv("HOME")
 	if len(h) == 0 {
 		var usr, _ = user.Current()
@@ -81,42 +61,41 @@ func getUserHOme() string {
 }
 
 func main() {
-	os.Setenv("HTTP_PROXY", "http://127.0.0.1:8888")
+	//os.Setenv("HTTP_PROXY", "http://127.0.0.1:8888")
 
 	defer func() {
 		e := recover()
 		if e != nil {
 			fmt.Fprintf(os.Stderr, "%+v", e)
+			os.Exit(-1)
 		}
 	}()
+
+	commands := []cmd.Command{
+		*cmd.CreateListCommand(app),
+		*cmd.CreateStatCommand(app),
+		*cmd.CreatePullCommand(app),
+		*cmd.CreatePushCommand(app),
+		*cmd.CreateRmCommand(app),
+	}
 
 	var command = kingpin.MustParse(app.Parse(os.Args[1:]))
 
 	client := &cosclient.CosClient{}
 	json.Unmarshal(loadConfig(configFile), client)
 
-	switch command {
-
-	case pull.FullCommand():
-		client.Download(*pullRemote, *pullLoacl)
-
-	case push.FullCommand():
-		client.Upload(*pushLocal, *pushRemote, false)
-
-	case rm.FullCommand():
-		client.DeleteResource(*rmPath, *rmRecursive, *rmForce)
-
-	case ls.FullCommand():
-		client.List(*lsPath, "")
-	case stat.FullCommand():
-		client.StatFile(*statPath)
-
-	case env.FullCommand():
+	if env.FullCommand() == command {
 		fmt.Println("config: " + config)
 
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		encoder.Encode(client)
+	} else {
+		for _, comm := range commands {
+			if comm.Name() == command {
+				comm.Execute(client)
+			}
+		}
 	}
 
 }

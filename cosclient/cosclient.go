@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	MAX_SINGLE_SIZE         int64 = 8 * 1024 * 1024
+	MAX_SINGLE_SIZE int64 = 8 * 1024 * 1024
 	UPLOAD_SLICE_BLOCK_SIZE int64 = 1024 * 1024
 )
 
@@ -44,8 +44,8 @@ type CosError struct {
 }
 
 type CosBaseResponse struct {
-	Code    int    `json : "code"`
-	Message string `json : "Message"`
+	Code    int    `json:"code"`
+	Message string `json:"Message"`
 }
 
 var (
@@ -57,7 +57,7 @@ func (e *CosError) Error() string {
 }
 
 type CosResource struct {
-	Name string `json : "name"`
+	Name string `json:"name"`
 }
 
 func (c *CosClient) Upload(local string, remote string, cover bool) {
@@ -68,13 +68,13 @@ func (c *CosClient) Upload(local string, remote string, cover bool) {
 	if fi.IsDir() {
 
 		if !strings.HasSuffix(remote, "/") {
-			fmt.Fprintln(os.Stderr, `<remote> must end with "\"`)
-			os.Exit(1)
+			fmt.Fprintln(os.Stderr, `<remote> must end with "/"`)
+			os.Exit(-1)
 		}
 		filepath.Walk(local, func(path string, info os.FileInfo, err error) error {
 			panicError(err)
 			if !info.IsDir() {
-				c.UploadFile(path, remote+strings.Replace(path, string(os.PathSeparator), "/", -1), cover)
+				c.UploadFile(path, remote + strings.Replace(path, string(os.PathSeparator), "/", -1), cover)
 			}
 			return nil
 		})
@@ -115,7 +115,7 @@ func (c *CosClient) UploadFile(local string, remote string, cover bool) {
 
 	request, _ := http.NewRequest("POST", c.buildResourceURL(remote), body)
 	request.Header.Add("Authorization", c.multiSignature())
-	request.Header.Add("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
 	var result struct {
 		Code    int    `json:"code"`
@@ -156,14 +156,14 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 	sign := c.multiSignature()
 	request, _ := http.NewRequest("POST", url, body)
 	request.Header.Add("Authorization", sign)
-	request.Header.Add("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
 	var response struct {
-		Code    int    `json : "code"`
-		Message string `json : "Message"`
+		Code    int    `json:"code"`
+		Message string `json:"Message"`
 		Data    struct {
-			Session string `json:"session"`
-		} `json : "data"`
+				Session string `json:"session"`
+			} `json:"data"`
 	}
 	doRequestAsJson(request, &response)
 
@@ -185,9 +185,9 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 	for offset < fi.Size() {
 
 		b := make([]byte, UPLOAD_SLICE_BLOCK_SIZE)
-		len, _ := file.ReadAt(b, offset)
-		go uploadSlice(url, sign, session, offset, b[:len], ch, threadPool)
-		offset = offset + int64(len)
+		length, _ := file.ReadAt(b, offset)
+		go uploadSlice(url, sign, session, offset, b[:length], ch, threadPool)
+		offset = offset + int64(length)
 		count++
 	}
 
@@ -209,7 +209,7 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 
 		request, _ = http.NewRequest("POST", url, body)
 		request.Header.Add("Authorization", sign)
-		request.Header.Add("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+		request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
 		response := CosBaseResponse{}
 		doRequestAsJson(request, &response)
@@ -241,7 +241,7 @@ func uploadSlice(url, sign, session string, offset int64, b []byte, ch chan int,
 
 	request, _ := http.NewRequest("POST", url, body)
 	request.Header.Add("Authorization", sign)
-	request.Header.Add("Content-Type", "multipart/form-data; boundary="+writer.Boundary())
+	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
 	response := CosBaseResponse{}
 	doRequestAsJson(request, &response)
@@ -255,66 +255,75 @@ func (c *CosClient) UploadDirectory(local string, remote string, cover bool) {
 
 func (c *CosClient) Download(remote string, local string) {
 
-	os.MkdirAll(local, 0766)
+	request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
+	request.Header.Add("Authorization", c.multiSignature())
 
-	if strings.HasSuffix(remote, "/") {
+	resp, _ := client.Do(request)
+	defer resp.Body.Close()
+	if resp.StatusCode == 200 || resp.StatusCode == 206 {
 
-	} else {
+		local, _  = filepath.Abs(local)
+		file, err := os.Create(local)
 
-		request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
-		request.Header.Add("Authorization", c.multiSignature())
-		resp, _ := client.Do(request)
-		defer resp.Body.Close()
-		if resp.StatusCode == 200 || resp.StatusCode == 206 {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "can not create %s failure: %s\r\n", local, err)
+		}
+		defer file.Close()
 
-			fname := remote[strings.LastIndex(remote, "/"):]
-			p, _ := filepath.Abs(local)
-			fname = p + string(os.PathSeparator) + fname
-			file, err := os.Create(fname)
-
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "can not create %s failure: %s ", fname, err)
-			}
-			defer file.Close()
-
-			_, err = io.Copy(file, resp.Body)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "write %s failure: %s ", fname, err)
-			}
-
-		} else {
-			fmt.Fprintf(os.Stderr, "download %s failure: %s ", remote, resp.Status)
+		_, err = io.Copy(file, resp.Body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "write %s failure: %s\r\n", local, err)
+		}else{
+			fmt.Printf("download %s to %s success!\r\n", remote, local)
 		}
 
+	} else {
+		fmt.Fprintf(os.Stderr, "download %s failure: %s \r\n", remote, resp.Status)
 	}
 
 }
 
 // ListResponse : cos list response
 type ListResponse struct {
-	Code    int    `json :"code"`
-	Message string `json :"message"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 	Data    struct {
-		Listover bool          `json:"listover"`
-		Context  string        `json:"context"`
-		Infos    []CosResource `json:"infos"`
-	} `json :"data"`
+			Listover bool          `json:"listover"`
+			Context  string        `json:"context"`
+			Infos    []CosResource `json:"infos"`
+		} `json:"data"`
 }
 
-func (c *CosClient) StatFile(path string) {
+type StatFileResult struct {
+	AccessUrl     string `json:"access_url,omitempty"`
+	Authority     string `json:"authority,omitempty"`
+	BizAttr       string `json:"biz_attr"`
+	Ctime         int64 `json:"ctime"`
+	CustomHeaders map[string]interface{} `json:"custom_headers"`
+	FileLen       int64 `json:"filelen"`
+	FileSize      int64 `json:"filesize"`
+	Forbid        int `json:"forbid"`
+	Mtime         int64 `json:"mtime"`
+	PreviewUrl    string `json:"preview_url,omitempty"`
+	Sha           string `json:"sha,omitempty"`
+	SliceSize     int64 `json:"slicesize,omitempty"`
+	SourceUrl     string `json:"source_url,omitempty"`
+}
 
-	request, _ := http.NewRequest("GET", c.buildResourceURL(path)+"?op=stat", nil)
+func (c *CosClient) StatFile(path string) *map[string]interface{} {
+
+	request, _ := http.NewRequest("GET", c.buildResourceURL(path) + "?op=stat", nil)
 	request.Header.Add("Authorization", c.multiSignature())
-	var response map[string]interface{}
-	doRequestAsJson(request, &response)
-	fmtJson, _ := json.MarshalIndent(response["data"], "", "\t")
-	fmt.Println(string(fmtJson))
+	response := &map[string]interface{}{}
+	doRequestAsJson(request, response)
+	//json.NewEncoder(os.Stdout).Encode(response)
+	return response
 
 }
 
 func (c *CosClient) List(path string, context string) {
 
-	response := c.execList(path, context)
+	response := c.ExecList(path, context)
 
 	for _, resource := range response.Data.Infos {
 		fmt.Println(resource.Name)
@@ -325,15 +334,13 @@ func (c *CosClient) List(path string, context string) {
 	}
 }
 
-func (c *CosClient) execList(path string, context string) *ListResponse {
+func (c *CosClient) ExecList(path string, context string) *ListResponse {
 
-	var query string
-	if context == "" {
-		query = "?op=list&num=1000"
-	} else {
-		query = "?op=list&num=1000&context=" + context
+	query := "?op=list&num=1000"
+	if context != "" {
+		query = query + "&context=" + context
 	}
-	request, _ := http.NewRequest("GET", c.buildResourceURL(path)+query, nil)
+	request, _ := http.NewRequest("GET", c.buildResourceURL(path) + query, nil)
 	request.Header.Add("Authorization", c.multiSignature())
 
 	response := ListResponse{}
@@ -360,12 +367,12 @@ func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 		listOver := false
 		context := ""
 		for !listOver {
-			listResp := c.execList(path, context)
+			listResp := c.ExecList(path, context)
 			listOver = listResp.Data.Listover
 			context = listResp.Data.Context
 
 			for _, resource := range listResp.Data.Infos {
-				c.DeleteResource(path+resource.Name, recursive, force)
+				c.DeleteResource(path + resource.Name, recursive, force)
 
 			}
 
@@ -382,10 +389,10 @@ func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 	sign := c.onceSignature(path)
 	request.Header.Add("Authorization", sign)
 	request.Header.Add("Content-Type", "application/json")
-	//println(path)
+	//println(path
 	resp := doRequest(request)
-	json, _ := ioutil.ReadAll(resp.Body)
-	println(string(json))
+	respBody, _ := ioutil.ReadAll(resp.Body)
+	println(string(respBody))
 }
 
 func (c *CosClient) onceSignature(file string) string {
@@ -490,7 +497,9 @@ func doRequestAsJson(request *http.Request, val interface{}) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(body, val)
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	return decoder.Decode(val)
 }
 
 func panicError(err error) {
