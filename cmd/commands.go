@@ -131,7 +131,7 @@ func pull(cosClient *cosclient.CosClient, remote, local string, threads chan int
 				threads <- 1
 				waitter.Done()
 			}()
-			cosClient.Download(remote, local)
+			cosClient.Download(remote, local, 0, nil)
 		}(cosClient, remote, local)
 
 	}
@@ -150,6 +150,7 @@ type PushCommand struct {
 	clause *kingpin.CmdClause
 	local  *string
 	remote *string
+	cover *bool
 }
 
 func (l PushCommand) Name() string {
@@ -157,15 +158,16 @@ func (l PushCommand) Name() string {
 }
 
 func (p PushCommand) Execute(cosClient *cosclient.CosClient) {
-	cosClient.Upload(*p.local, *p.remote, false)
+	cosClient.Upload(*p.local, *p.remote, *p.cover)
 }
 
 func CreatePushCommand(app *kingpin.Application) *PushCommand {
 	clause := app.Command("push", "pusl local file to cos")
 	return &PushCommand{
 		clause:clause,
-		local: clause.Arg("local", "local path").Required().String(),
+		local: clause.Arg("local", "local path").Required().ExistingFileOrDir(),
 		remote:  clause.Arg("remote", "remote path").Required().String(),
+		cover: clause.Flag("force", "force cover files on cos").Short('f').Bool(),
 	}
 }
 

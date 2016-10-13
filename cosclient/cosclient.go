@@ -19,6 +19,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
+	"sync"
 )
 
 const (
@@ -43,18 +44,18 @@ type CosError struct {
 	Message string
 }
 
+func (e *CosError) Error() string {
+	return fmt.Sprintf("cos error - %d :%s", e.Code, e.Message)
+}
+
 type CosBaseResponse struct {
 	Code    int    `json:"code"`
-	Message string `json:"Message"`
+	Message string `json:"message"`
 }
 
 var (
 	client = &http.Client{}
 )
-
-func (e *CosError) Error() string {
-	return fmt.Sprintf("cos error - %d :%s", e.Code, e.Message)
-}
 
 type CosResource struct {
 	Name string `json:"name"`
@@ -63,7 +64,6 @@ type CosResource struct {
 func (c *CosClient) Upload(local string, remote string, cover bool) {
 	fi, err := os.Stat(local)
 	panicError(err)
-	fmt.Printf("upload from %s to %s\n", local, remote)
 
 	if fi.IsDir() {
 
@@ -71,10 +71,12 @@ func (c *CosClient) Upload(local string, remote string, cover bool) {
 			fmt.Fprintln(os.Stderr, `<remote> must end with "/"`)
 			os.Exit(-1)
 		}
-		filepath.Walk(local, func(path string, info os.FileInfo, err error) error {
+		localAbs, _ := filepath.Abs(local)
+		filepath.Walk(localAbs, func(path string, info os.FileInfo, err error) error {
 			panicError(err)
 			if !info.IsDir() {
-				c.UploadFile(path, remote + strings.Replace(path, string(os.PathSeparator), "/", -1), cover)
+				idx := len(localAbs)
+				c.UploadFile(path, remote + strings.Replace(path[idx:], string(os.PathSeparator), "/", -1), cover)
 			}
 			return nil
 		})
@@ -85,7 +87,6 @@ func (c *CosClient) Upload(local string, remote string, cover bool) {
 }
 
 func (c *CosClient) UploadFile(local string, remote string, cover bool) {
-	fmt.Printf("upload from %s to %s\n", local, remote)
 	fi, err := os.Stat(local)
 	if err != nil {
 		panic(err)
@@ -99,7 +100,7 @@ func (c *CosClient) UploadFile(local string, remote string, cover bool) {
 	file, err := os.Open(local)
 	defer file.Close()
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "[failre  %s] - %+v\r\n", remote, err)
 	}
 	fileContent, _ := ioutil.ReadAll(file)
 	//shaSum := sha1.Sum(fileContent)
@@ -117,15 +118,12 @@ func (c *CosClient) UploadFile(local string, remote string, cover bool) {
 	request.Header.Add("Authorization", c.multiSignature())
 	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
-	var result struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	}
+	result := CosBaseResponse{}
 	doRequestAsJson(request, &result)
 	if result.Code == 0 {
-		fmt.Printf("[ok   %s]", remote)
+		fmt.Printf("[ok   %s]\r\n", remote)
 	} else {
-		fmt.Fprintf(os.Stderr, "[fail %s] - %s", remote, result.Message)
+		fmt.Fprintf(os.Stderr, "[failre  %s] - %s\r\n", remote, result.Message)
 	}
 }
 
@@ -168,7 +166,7 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 	doRequestAsJson(request, &response)
 
 	if response.Code != 0 {
-		fmt.Fprintf(os.Stderr, "[fail %s] - %+v", remote, response.Message)
+		fmt.Fprintf(os.Stderr, "[failure %s] - %s\r\n", remote, response.Message)
 	}
 
 	session := response.Data.Session
@@ -214,13 +212,13 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 		response := CosBaseResponse{}
 		doRequestAsJson(request, &response)
 		if response.Code == 0 {
-			fmt.Printf("[ok   %s]", remote)
+			fmt.Printf("[ok     %s]\r\n", remote)
 		} else {
-			fmt.Fprintf(os.Stderr, "[fail %s] - %s", remote, response.Message)
+			fmt.Fprintf(os.Stderr, "[fail %s] - %s\r\n", remote, response.Message)
 		}
 
 	} else {
-		fmt.Fprintf(os.Stderr, "[fail %s] ", remote)
+		fmt.Fprintf(os.Stderr, "[failre %s]\r\n", remote)
 	}
 
 }
@@ -253,28 +251,59 @@ func (c *CosClient) UploadDirectory(local string, remote string, cover bool) {
 
 }
 
-func (c *CosClient) Download(remote string, local string) {
+func (c *CosClient) Download(remote string, local string, start int64, file *os.File) {
 
 	request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
 	request.Header.Add("Authorization", c.multiSignature())
+	if (start > 0 ) {
+		request.Header.Add("Range", "bytes=" + strconv.FormatInt(start, 10) + "-")
+	}
 
 	resp, _ := client.Do(request)
 	defer resp.Body.Close()
+	off := start
 	if resp.StatusCode == 200 || resp.StatusCode == 206 {
 
-		local, _  = filepath.Abs(local)
-		file, err := os.Create(local)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "can not create %s failure: %s\r\n", local, err)
+		local, _ = filepath.Abs(local)
+		if file == nil {
+			var err error
+			file, err = os.Create(local)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "can not create %s failure: %s\r\n", local, err)
+			}
 		}
 		defer file.Close()
 
-		_, err = io.Copy(file, resp.Body)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "write %s failure: %s\r\n", local, err)
-		}else{
-			fmt.Printf("download %s to %s success!\r\n", remote, local)
+		for {
+			buf := make([]byte, 32 * 1024)
+			readLen, e := resp.Body.Read(buf)
+
+			if (readLen > 0 ) {
+				length, we := file.WriteAt(buf[:readLen], off)
+				off += int64(length)
+				if we != nil {
+					fmt.Fprintf(os.Stderr, "write %s failure: %+v\r\n", local, we)
+					return
+				}
+			}
+
+			if e != nil {
+				if e == io.EOF {
+					fmt.Printf("download %s to %s success!\r\n", remote, local)
+					return
+				} else {
+					if off == start {
+						fmt.Fprintf(os.Stderr, "download %s failure: %+v\r\n", remote, e)
+						return
+					} else {
+						fmt.Fprintf(os.Stderr, "%s download error (%+v), retry!\r\n", remote, e)
+						c.Download(remote, local, off, file)
+						return
+					}
+
+				}
+			}
+
 		}
 
 	} else {
@@ -357,7 +386,7 @@ func (c *CosClient) ExecList(path string, context string) *ListResponse {
 func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 
 	if strings.HasSuffix(path, "/") && !recursive {
-		fmt.Fprintln(os.Stderr, "use -r for delete directories")
+		fmt.Fprintln(os.Stderr, "use -r for delete directories\r\n")
 		os.Exit(1)
 	}
 
@@ -390,9 +419,13 @@ func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 	request.Header.Add("Authorization", sign)
 	request.Header.Add("Content-Type", "application/json")
 	//println(path
-	resp := doRequest(request)
-	respBody, _ := ioutil.ReadAll(resp.Body)
-	println(string(respBody))
+	result := CosBaseResponse{}
+	doRequestAsJson(request, &result)
+	if result.Code == 0 {
+		fmt.Printf("[Deleted %s]\r\n", path)
+	} else {
+		fmt.Fprintf(os.Stderr, "Failure(%s), %s\r\n", result.Message, path)
+	}
 }
 
 func (c *CosClient) onceSignature(file string) string {
@@ -418,24 +451,32 @@ func (c *CosClient) onceSignature(file string) string {
 
 }
 
-func (c *CosClient) multiSignature() string {
-	var data = struct {
-		AppID    string
-		SecretID string
-		Bucket   string
-		Exprire  int64
-		Now      int64
-		Random   int
-	}{c.AppID, c.SecretID, c.Bucket, time.Now().Unix() + 7776000, time.Now().Unix(), rand.Intn(9000000000) + 1000000000}
-	t, _ := template.New("signature-multi").Parse("a={{.AppID}}&b={{.Bucket}}&k={{.SecretID}}&e={{.Exprire}}&t={{.Now}}&r={{.Random}}&f=")
-	var s bytes.Buffer
-	t.Execute(&s, data)
+var signatureHolder = struct {
+	once      sync.Once
+	signature string
+}{sync.Once{}, ""}
 
-	hash := hmac.New(sha1.New, []byte(c.SecretKey))
-	hash.Write([]byte(s.String()))
-	sum := hash.Sum(nil)
-	sign := base64.StdEncoding.EncodeToString(append(sum, []byte(s.String())...))
-	return sign
+func (c *CosClient) multiSignature() string {
+	signatureHolder.once.Do(func() {
+		var data = struct {
+			AppID    string
+			SecretID string
+			Bucket   string
+			Exprire  int64
+			Now      int64
+			Random   int
+		}{c.AppID, c.SecretID, c.Bucket, time.Now().Unix() + 7776000, time.Now().Unix(), rand.Intn(9000000000) + 1000000000}
+		t, _ := template.New("signature-multi").Parse("a={{.AppID}}&b={{.Bucket}}&k={{.SecretID}}&e={{.Exprire}}&t={{.Now}}&r={{.Random}}&f=")
+		var s bytes.Buffer
+		t.Execute(&s, data)
+
+		hash := hmac.New(sha1.New, []byte(c.SecretKey))
+		hash.Write(s.Bytes())
+		sum := hash.Sum(nil)
+		sign := base64.StdEncoding.EncodeToString(append(sum, []byte(s.String())...))
+		signatureHolder.signature = sign
+	})
+	return signatureHolder.signature;
 }
 
 func (c *CosClient) buildResourceURL(path string) string {
