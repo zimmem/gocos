@@ -6,9 +6,9 @@
 
 gocos 按以下顺序查找配置文件， 一但找到就不继续找
 
-1. --config 参数指定配置文件路径
-2. 当前目录下 cos.config.json
-3. $HOME 目录下 .cos.config.json
+1. `--config` 参数指定配置文件路径
+2. 当前目录下 `cos.config.json`
+3. $HOME 目录下 `.cos.config.json`
 
 ### 配置文件格式
 
