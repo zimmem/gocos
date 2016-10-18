@@ -131,7 +131,9 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 
 	defer func() {
 		e := recover()
-		fmt.Printf("%-v", e)
+		if e  != nil {
+			fmt.Fprintf(os.Stderr, "[failure %s] - %+v\r\n", remote, e)
+		}
 	}()
 
 	file, err := os.Open(local)

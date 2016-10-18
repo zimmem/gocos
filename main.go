@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	app = kingpin.New("gocos", "A command-line toll for qcloud cos.")
+	app = kingpin.New("gocos", "A command-line tool for qcloud cos.")
 	configFile = app.Flag("config", "config file path").String()
 
 	env = app.Command("env", "show current config")
