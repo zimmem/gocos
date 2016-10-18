@@ -29,7 +29,7 @@ gocos 按以下顺序查找配置文件， 一但找到就不继续找
 ```
 usage: gocos [<flags>] <command> [<args> ...]
 
-A command-line toll for qcloud cos.
+A command-line tool for qcloud cos.
 
 Flags:
   --help           Show context-sensitive help (also try --help-long and
