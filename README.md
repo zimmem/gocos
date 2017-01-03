@@ -27,6 +27,7 @@ gocos 按以下顺序查找配置文件， 一但找到就不继续找
 ## usage
 
 ```
+$gocos
 usage: gocos [<flags>] <command> [<args> ...]
 
 A command-line tool for qcloud cos.
@@ -57,4 +58,10 @@ Commands:
 
   rm [<flags>] <remote>
     rm files or directories from cos
+
+  mv [<flags>] <src> <target>
+    mv file from src to target.
+
+  cat <remote>
+    cat file from cos.
 ```
