@@ -72,11 +72,13 @@ func main() {
 	}()
 
 	commands := []cmd.Command{
-		*cmd.CreateListCommand(app),
-		*cmd.CreateStatCommand(app),
-		*cmd.CreatePullCommand(app),
-		*cmd.CreatePushCommand(app),
-		*cmd.CreateRmCommand(app),
+		cmd.CreateListCommand(app),
+		cmd.CreateStatCommand(app),
+		cmd.CreatePullCommand(app),
+		cmd.CreatePushCommand(app),
+		cmd.CreateRmCommand(app),
+		cmd.CreateMvCommand(app),
+		cmd.CreateCatCommand(app),
 	}
 
 	var command = kingpin.MustParse(app.Parse(os.Args[1:]))

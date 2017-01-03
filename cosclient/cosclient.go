@@ -253,6 +253,23 @@ func (c *CosClient) UploadDirectory(local string, remote string, cover bool) {
 
 }
 
+func (c *CosClient) DownloadStream(remote string ,callback func(io.Reader)) {
+	request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
+	request.Header.Add("Authorization", c.multiSignature())
+	resp, e := client.Do(request)
+	defer resp.Body.Close()
+	if e != nil {
+		fmt.Fprintf(os.Stderr,"error occurred while download %s : %+v", remote , e )
+		os.Exit(-1);
+	}
+	length,_ := strconv.ParseInt(resp.Header.Get("content-length"), 10, 32)
+	if length  > 1024*1024 {
+		fmt.Fprintf(os.Stderr, "%s is too large , use `gocos pull` instead", remote);
+		os.Exit(-1);
+	};
+	callback(resp.Body);
+}
+
 func (c *CosClient) Download(remote string, local string, start int64, file *os.File) {
 
 	request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
@@ -271,7 +288,7 @@ func (c *CosClient) Download(remote string, local string, start int64, file *os.
 			var err error
 			file, err = os.Create(local)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "can not create %s failure: %s\r\n", local, err)
+				fmt.Fprintf(os.Stderr, "create %s failure: %s\r\n", local, err)
 			}
 		}
 		defer file.Close()
@@ -427,6 +444,34 @@ func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 		fmt.Printf("[Deleted %s]\r\n", path)
 	} else {
 		fmt.Fprintf(os.Stderr, "Failure(%s), %s\r\n", result.Message, path)
+	}
+}
+
+func (c *CosClient) Move(src, target string, force bool)  {
+
+	if strings.HasSuffix(src, "/"){
+		fmt.Fprintln(os.Stderr, "can not move directory !\r\n")
+		os.Exit(1)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	writer.WriteField("op", "move")
+	writer.WriteField("dest_fileid", target )
+	if force {
+		writer.WriteField("to_over_write", "1" )
+	}
+
+	request, _ := http.NewRequest("POST", c.buildResourceURL(src),body)
+	request.Header.Add("Authorization",  c.onceSignature(src))
+	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
+
+	result := CosBaseResponse{}
+	doRequestAsJson(request, &result)
+	if result.Code == 0 {
+		fmt.Printf("[Move %s to %s Success]\r\n", src, target)
+	} else {
+		fmt.Printf("[Move %s to %s failure : %s]\r\n", src, target, result.Message)
 	}
 }
 
