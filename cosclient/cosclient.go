@@ -110,7 +110,7 @@ func (c *CosClient) UploadFile(local string, remote string, cover bool) {
 	writer.WriteField("op", "upload")
 	//writer.WriteField("sha", base64.StdEncoding.EncodeToString(shaSum[:]))
 	if cover {
-		writer.WriteField("insertOnly", "1")
+		writer.WriteField("insertOnly", "0")
 	}
 	writer.WriteField("filecontent", string(fileContent))
 
@@ -123,7 +123,7 @@ func (c *CosClient) UploadFile(local string, remote string, cover bool) {
 	if result.Code == 0 {
 		fmt.Printf("[ok   %s]\r\n", remote)
 	} else {
-		fmt.Fprintf(os.Stderr, "[failre  %s] - %s\r\n", remote, result.Message)
+		fmt.Fprintf(os.Stderr, "[failre  %s] - %d:%s\r\n", remote, result.Code, result.Message)
 	}
 }
 
@@ -131,7 +131,7 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 
 	defer func() {
 		e := recover()
-		if e  != nil {
+		if e != nil {
 			fmt.Fprintf(os.Stderr, "[failure %s] - %+v\r\n", remote, e)
 		}
 	}()
@@ -172,7 +172,7 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 	}
 
 	session := response.Data.Session
-	ch := make(chan int)
+	ch := make(chan int, fi.Size() / UPLOAD_SLICE_BLOCK_SIZE)
 
 	var offset int64
 	count := 0
@@ -186,7 +186,13 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 
 		b := make([]byte, UPLOAD_SLICE_BLOCK_SIZE)
 		length, _ := file.ReadAt(b, offset)
-		go uploadSlice(url, sign, session, offset, b[:length], ch, threadPool)
+		<-threadPool
+		go func(url, sign, session string, offset int64, bytes []byte, resultCH chan int) {
+			defer func() {
+				threadPool <- 1
+			}()
+			uploadSlice(url, sign, session, offset, bytes, resultCH)
+		}(url, sign, session, offset, b[:length], ch)
 		offset = offset + int64(length)
 		count++
 	}
@@ -225,11 +231,7 @@ func (c *CosClient) UploadLargeFile(local string, remote string, cover bool) {
 
 }
 
-func uploadSlice(url, sign, session string, offset int64, b []byte, ch chan int, tp chan int) {
-	defer func() {
-		tp <- 1
-	}()
-	<-tp
+func uploadSlice(url, sign, session string, offset int64, b []byte, ch chan int) {
 	body := &bytes.Buffer{}
 
 	writer := multipart.NewWriter(body)
@@ -253,18 +255,18 @@ func (c *CosClient) UploadDirectory(local string, remote string, cover bool) {
 
 }
 
-func (c *CosClient) DownloadStream(remote string ,callback func(io.Reader)) {
+func (c *CosClient) DownloadStream(remote string, callback func(io.Reader)) {
 	request, _ := http.NewRequest("GET", c.buildDownloadUrl(remote), nil)
 	request.Header.Add("Authorization", c.multiSignature())
 	resp, e := client.Do(request)
 	defer resp.Body.Close()
 	if e != nil {
-		fmt.Fprintf(os.Stderr,"error occurred while download %s : %+v", remote , e )
+		fmt.Fprintf(os.Stderr, "error occurred while download %s : %+v", remote, e)
 		os.Exit(-1);
 	}
-	length,_ := strconv.ParseInt(resp.Header.Get("content-length"), 10, 32)
-	if length  > 1024*1024 {
-		fmt.Fprintf(os.Stderr, "%s is too large , use `gocos pull` instead", remote);
+	length, _ := strconv.ParseInt(resp.Header.Get("content-length"), 10, 32)
+	if length > 1024 * 1024 {
+		fmt.Fprintf(os.Stderr, "%s is too large , use `gocos pull` instead\n", remote);
 		os.Exit(-1);
 	};
 	callback(resp.Body);
@@ -329,6 +331,22 @@ func (c *CosClient) Download(remote string, local string, start int64, file *os.
 		fmt.Fprintf(os.Stderr, "download %s failure: %s \r\n", remote, resp.Status)
 	}
 
+}
+
+func (c *CosClient) UpdateAuthority(remote, authority *string) CosBaseResponse {
+	data := struct {
+		Op        string    `json:"op"`
+		Authority string `json:"authority"`
+	}{"update", *authority, }
+
+	body, _ := json.Marshal(data)
+	request, _ := http.NewRequest("POST", c.buildResourceURL(*remote), bytes.NewBuffer(body))
+	request.Header.Add("Authorization", c.multiSignature())
+	request.Header.Add("Content-Type", "application/json")
+
+	response := CosBaseResponse{}
+	doRequestAsJson(request, &response)
+	return response
 }
 
 // ListResponse : cos list response
@@ -447,9 +465,9 @@ func (c *CosClient) DeleteResource(path string, recursive, force bool) {
 	}
 }
 
-func (c *CosClient) Move(src, target string, force bool)  {
+func (c *CosClient) Move(src, target string, force bool) {
 
-	if strings.HasSuffix(src, "/"){
+	if strings.HasSuffix(src, "/") {
 		fmt.Fprintln(os.Stderr, "can not move directory !\r\n")
 		os.Exit(1)
 	}
@@ -457,13 +475,13 @@ func (c *CosClient) Move(src, target string, force bool)  {
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	writer.WriteField("op", "move")
-	writer.WriteField("dest_fileid", target )
+	writer.WriteField("dest_fileid", target)
 	if force {
-		writer.WriteField("to_over_write", "1" )
+		writer.WriteField("to_over_write", "1")
 	}
 
-	request, _ := http.NewRequest("POST", c.buildResourceURL(src),body)
-	request.Header.Add("Authorization",  c.onceSignature(src))
+	request, _ := http.NewRequest("POST", c.buildResourceURL(src), body)
+	request.Header.Add("Authorization", c.onceSignature(src))
 	request.Header.Add("Content-Type", "multipart/form-data; boundary=" + writer.Boundary())
 
 	result := CosBaseResponse{}

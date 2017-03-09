@@ -13,6 +13,8 @@ import (
 	"bytes"
 )
 
+var Failure = false
+
 type Command interface {
 	Execute(cosClient *cosclient.CosClient)
 	Name() string
@@ -152,7 +154,7 @@ type PushCommand struct {
 	clause *kingpin.CmdClause
 	local  *string
 	remote *string
-	cover *bool
+	cover  *bool
 }
 
 func (l *PushCommand) Name() string {
@@ -199,12 +201,11 @@ func CreateRmCommand(app *kingpin.Application) *RmCommand {
 	}
 }
 
-
 type MvCommand struct {
-	clause    *kingpin.CmdClause
+	clause *kingpin.CmdClause
 	src    *string
 	target *string
-	force     *bool
+	force  *bool
 }
 
 func (l *MvCommand) Name() string {
@@ -226,9 +227,9 @@ func CreateMvCommand(app *kingpin.Application) *MvCommand {
 	}
 }
 
-type CatCommand struct{
-	clause    *kingpin.CmdClause
-	remote    *string
+type CatCommand struct {
+	clause *kingpin.CmdClause
+	remote *string
 }
 
 func (l *CatCommand) Name() string {
@@ -236,12 +237,12 @@ func (l *CatCommand) Name() string {
 }
 
 func (r *CatCommand) Execute(cosClient *cosclient.CosClient) {
-	callback := func(reader  io.Reader){
+	callback := func(reader  io.Reader) {
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(reader)
-		fmt.Println( buf.String())
+		fmt.Println(buf.String())
 	}
-	cosClient.DownloadStream(*r.remote, callback );
+	cosClient.DownloadStream(*r.remote, callback);
 }
 
 func CreateCatCommand(app *kingpin.Application) *CatCommand {
@@ -250,5 +251,34 @@ func CreateCatCommand(app *kingpin.Application) *CatCommand {
 	return &CatCommand{
 		clause:clause,
 		remote:   clause.Arg("remote", "cos file ").Required().String(),
+	}
+}
+
+type UpdateCommand struct {
+	clause    *kingpin.CmdClause
+	remote    *string
+	authority *string
+}
+
+func (l *UpdateCommand) Name() string {
+	return l.clause.FullCommand()
+}
+
+func (r *UpdateCommand) Execute(cosClient *cosclient.CosClient) {
+	response := cosClient.UpdateAuthority(r.remote, r.authority);
+	if response.Code == 0 {
+		fmt.Printf("success")
+	}else{
+		fmt.Fprintf(os.Stderr, "error: %d - %s\n",response.Code, response.Message)
+	}
+}
+
+func CreateUpdateCommand(app *kingpin.Application) *UpdateCommand {
+	clause := app.Command("update", "update file authority.")
+
+	return &UpdateCommand{
+		clause:clause,
+		remote:   clause.Arg("remote", "cos file ").Required().String(),
+		authority : clause.Flag("authority", "authority for file : eInvalid / eWRPrivate / eWPrivateRPublic").Short('a').Required().String(),
 	}
 }

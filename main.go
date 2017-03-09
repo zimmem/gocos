@@ -19,6 +19,7 @@ var (
 
 	env = app.Command("env", "show current config")
 	config = ""
+	Failure = false
 )
 
 func loadConfig(configFile *string) []byte {
@@ -79,6 +80,7 @@ func main() {
 		cmd.CreateRmCommand(app),
 		cmd.CreateMvCommand(app),
 		cmd.CreateCatCommand(app),
+		cmd.CreateUpdateCommand(app),
 	}
 
 	var command = kingpin.MustParse(app.Parse(os.Args[1:]))
